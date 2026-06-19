@@ -1,0 +1,165 @@
+from ctypes import *
+from dwfconstants import *
+import sys
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Digilent WaveForms SDK Library
+if sys.platform.startswith("win"):
+    dwf = cdll.dwf
+elif sys.platform.startswith("darwin"):
+    dwf = cdll.LoadLibrary("/Library/Frameworks/dwf.framework/dwf")
+else:
+    dwf = cdll.LoadLibrary("libdwf.so")
+
+# Open Analog Discovery and see if it runs
+
+hdwf = c_int()
+
+print("Opening Analog Discovery...")
+dwf.FDwfDeviceOpen(c_int(-1), byref(hdwf))
+
+if hdwf.value == hdwfNone.value:
+    print("ERROR: Could not open Analog Discovery.")
+    print("Close WaveForms, unplug/replug the device, and try again.")
+    sys.exit()
+
+print("Analog Discovery connected successfully!")
+
+# W1 Configuration on WaveGen
+frequency = 1000.0
+amplitude = 1.0
+offset = 0.0
+
+dwf.FDwfAnalogOutNodeEnableSet(
+    hdwf,
+    c_int(0),
+    AnalogOutNodeCarrier,
+    c_bool(True)
+)
+
+dwf.FDwfAnalogOutNodeFunctionSet(
+    hdwf,
+    c_int(0),
+    AnalogOutNodeCarrier,
+    funcSine
+)
+
+dwf.FDwfAnalogOutNodeFrequencySet(
+    hdwf,
+    c_int(0),
+    AnalogOutNodeCarrier,
+    c_double(frequency)
+)
+
+dwf.FDwfAnalogOutNodeAmplitudeSet(
+    hdwf,
+    c_int(0),
+    AnalogOutNodeCarrier,
+    c_double(amplitude)
+)
+
+dwf.FDwfAnalogOutNodeOffsetSet(
+    hdwf,
+    c_int(0),
+    AnalogOutNodeCarrier,
+    c_double(offset)
+)
+
+dwf.FDwfAnalogOutConfigure(
+    hdwf,
+    c_int(0),
+    c_bool(True)
+)
+
+print("WaveGen W1 started.")
+print(f"Signal: {frequency} Hz sine wave, {amplitude} V amplitude")
+
+# Scope Channel 1
+
+sample_rate = 100000.0
+num_samples = 4096
+
+dwf.FDwfAnalogInFrequencySet(
+    hdwf,
+    c_double(sample_rate)
+)
+
+dwf.FDwfAnalogInBufferSizeSet(
+    hdwf,
+    c_int(num_samples)
+)
+
+dwf.FDwfAnalogInChannelEnableSet(
+    hdwf,
+    c_int(0),
+    c_bool(True)
+)
+
+dwf.FDwfAnalogInChannelRangeSet(
+    hdwf,
+    c_int(0),
+    c_double(5.0)
+)
+
+time.sleep(1)
+
+# Collect WaveForm
+
+dwf.FDwfAnalogInConfigure(
+    hdwf,
+    c_bool(False),
+    c_bool(True)
+)
+
+status = c_byte()
+
+while True:
+    dwf.FDwfAnalogInStatus(
+        hdwf,
+        c_bool(True),
+        byref(status)
+    )
+
+    if status.value == DwfStateDone.value:
+        break
+
+    time.sleep(0.01)
+
+# Read Data
+
+samples = (c_double * num_samples)()
+
+dwf.FDwfAnalogInStatusData(
+    hdwf,
+    c_int(0),
+    samples,
+    c_int(num_samples)
+)
+
+data = np.array(samples)
+time_axis = np.arange(num_samples) / sample_rate
+
+# Stop WaveGen
+
+dwf.FDwfAnalogOutConfigure(
+    hdwf,
+    c_int(0),
+    c_bool(False)
+)
+
+dwf.FDwfDeviceClose(hdwf)
+
+print("Measurement complete.")
+
+# Plot measured waveform
+
+plt.figure(figsize=(10, 5))
+plt.plot(time_axis * 1000, data)
+plt.title("Analog Discovery Python Loopback Measurement")
+plt.xlabel("Time (ms)")
+plt.ylabel("Voltage (V)")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
