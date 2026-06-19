@@ -2,6 +2,8 @@ from ctypes import *
 from dwfconstants import *
 import sys
 import time
+import csv
+from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -31,6 +33,11 @@ print("Analog Discovery connected successfully!")
 frequency = 1000.0
 amplitude = 1.0
 offset = 0.0
+
+# Logging Settings
+log_file = "voltage_log.csv"
+log_interval_seconds = 5 # testing use sec, but for application use * 60 for minutes
+
 
 dwf.FDwfAnalogOutNodeEnableSet(
     hdwf,
@@ -107,59 +114,174 @@ time.sleep(1)
 
 # Collect WaveForm
 
-dwf.FDwfAnalogInConfigure(
-    hdwf,
-    c_bool(False),
-    c_bool(True)
-)
+# dwf.FDwfAnalogInConfigure(
+#     hdwf,
+#     c_bool(False),
+#     c_bool(True)
+# )
+#
+# status = c_byte()
+#
+# while True:
+#     dwf.FDwfAnalogInStatus(
+#         hdwf,
+#         c_bool(True),
+#         byref(status)
+#     )
+#
+#     if status.value == DwfStateDone.value:
+#         break
+#
+#     time.sleep(0.01)
+#
+# # Read Data
+#
+# samples = (c_double * num_samples)()
+#
+# dwf.FDwfAnalogInStatusData(
+#     hdwf,
+#     c_int(0),
+#     samples,
+#     c_int(num_samples)
+# )
+#
+# data = np.array(samples)
+# time_axis = np.arange(num_samples) / sample_rate
+#
+# # Stop WaveGen
+#
+# dwf.FDwfAnalogOutConfigure(
+#     hdwf,
+#     c_int(0),
+#     c_bool(False)
+# )
+#
+# dwf.FDwfDeviceClose(hdwf)
+#
+# print("Measurement complete.")
+#
+# # Plot measured waveform
+#
+# plt.figure(figsize=(10, 5))
+# plt.plot(time_axis * 1000, data)
+# plt.title("Analog Discovery Python Loopback Measurement")
+# plt.xlabel("Time (ms)")
+# plt.ylabel("Voltage (V)")
+# plt.grid(True)
+# plt.tight_layout()
+# plt.show()
 
-status = c_byte()
+# Create a CSV file and write column headers
+with open(log_file, mode="w", newline="") as file:
+    writer = csv.writer(file)
+    writer.writerow([
+        "Timestamp",
+        "Average Voltage (V)",
+        "Minimum Voltage (V)",
+        "Maximum Voltage (V)",
+        "Peak-to-Peak Voltage (V)"
+    ])
 
-while True:
-    dwf.FDwfAnalogInStatus(
-        hdwf,
-        c_bool(True),
-        byref(status)
-    )
+print(f"Logging voltage data to {log_file}")
+print("Press CTRL+C to stop")
 
-    if status.value == DwfStateDone.value:
-        break
+# Live waveform plot setup
+plt.ion()  # turns on interactive plotting
 
-    time.sleep(0.01)
-
-# Read Data
-
-samples = (c_double * num_samples)()
-
-dwf.FDwfAnalogInStatusData(
-    hdwf,
-    c_int(0),
-    samples,
-    c_int(num_samples)
-)
-
-data = np.array(samples)
 time_axis = np.arange(num_samples) / sample_rate
 
-# Stop WaveGen
+figure, axis = plt.subplots(figsize=(10, 5))
+line, = axis.plot(time_axis * 1000, np.zeros(num_samples))
 
-dwf.FDwfAnalogOutConfigure(
-    hdwf,
-    c_int(0),
-    c_bool(False)
-)
+axis.set_title("Live Analog Discovery Scope CH1 Waveform")
+axis.set_xlabel("Time (ms)")
+axis.set_ylabel("Voltage (V)")
+axis.grid(True)
+axis.set_ylim(-1.5, 1.5)
 
-dwf.FDwfDeviceClose(hdwf)
+plt.show(block=False)
 
-print("Measurement complete.")
+try:
+    while True:
+        # Start scope acquisition
+        dwf.FDwfAnalogInConfigure(
+            hdwf,
+            c_bool(False),
+            c_bool(True)
+        )
 
-# Plot measured waveform
+        status = c_byte()
 
-plt.figure(figsize=(10, 5))
-plt.plot(time_axis * 1000, data)
-plt.title("Analog Discovery Python Loopback Measurement")
-plt.xlabel("Time (ms)")
-plt.ylabel("Voltage (V)")
-plt.grid(True)
-plt.tight_layout()
-plt.show()
+        # Wait until acquisition is complete
+        while True:
+            dwf.FDwfAnalogInStatus(
+                hdwf,
+                c_bool(True),
+                byref(status)
+            )
+
+            if status.value == DwfStateDone.value:
+                break
+
+            time.sleep(0.01)
+
+        # Read data
+        samples = (c_double * num_samples)()
+
+        dwf.FDwfAnalogInStatusData(
+            hdwf,
+            c_int(0),
+            samples,
+            c_int(num_samples)
+        )
+
+        data = np.array(samples)
+
+        # Live waveform plot
+        line.set_ydata(data)
+        axis.set_title(f"Live Scope CH1 Waveform - {datetime.now().strftime('%H:%M:%S')}")
+        figure.canvas.draw()
+        figure.canvas.flush_events()
+        plt.pause(0.05)
+
+        average_voltage = np.mean(data)
+        minimum_voltage = np.min(data)
+        maximum_voltage = np.max(data)
+        peak_to_peak_voltage = maximum_voltage - minimum_voltage
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Save data to CSV
+        with open(log_file, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                timestamp,
+                average_voltage,
+                minimum_voltage,
+                maximum_voltage,
+                peak_to_peak_voltage
+            ])
+
+        print(
+            f"{timestamp} | "
+            f"Avg = {average_voltage:.4f} V | "
+            f"Min = {minimum_voltage:.4f} V | "
+            f"Max = {maximum_voltage:.4f} V | "
+            f"Vpp = {peak_to_peak_voltage:.4f} V"
+        )
+
+        time.sleep(log_interval_seconds)
+
+except KeyboardInterrupt:
+    print("\nLogging stopped by user.")
+
+finally:
+    # Stop WaveGen
+    dwf.FDwfAnalogOutConfigure(
+        hdwf,
+        c_int(0),
+        c_bool(False)
+    )
+
+    dwf.FDwfDeviceClose(hdwf)
+
+    print("Analog Discovery closed.")
